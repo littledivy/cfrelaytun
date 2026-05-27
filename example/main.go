@@ -1,7 +1,7 @@
 // Minimal cfrelaytun client. Exposes a local HTTP server at a public
 // relay URL.
 //
-//	go run . -url wss://tun.example.com/agent -token $TOKEN -addr :3000
+//	go run . -url wss://tun.example.com/origin -token $TOKEN -addr :3000
 package main
 
 import (
@@ -14,12 +14,12 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/divy/orchid/cfrelaytun/go/cfrelaytun"
+	"github.com/littledivy/cfrelaytun"
 )
 
 func main() {
-	relayURL := flag.String("url", "", "wss:// URL of the relay /agent endpoint")
-	token := flag.String("token", "", "agent token")
+	relayURL := flag.String("url", "", "wss:// URL of the relay /origin endpoint")
+	token := flag.String("token", "", "origin token")
 	addr := flag.String("addr", "", "upstream local address to proxy (e.g. :3000)")
 	flag.Parse()
 

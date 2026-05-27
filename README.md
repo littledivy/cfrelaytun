@@ -8,7 +8,7 @@ streams back the same way.
 
 Two halves, used together or independently:
 
-- **`go/`** — Go client. `cfrelaytun.Run(ctx, Config{URL, Token, Handler})`
+- Go client at the repo root. `cfrelaytun.Run(ctx, Config{URL, Token, Handler})`
   and you're done.
 - **`worker/`** — TypeScript Worker lib. `makeRelayApp({...})` returns a
   [Hono](https://hono.dev) app; export the `TunnelSession` Durable Object
@@ -26,9 +26,9 @@ Both routing modes are supported:
 ### 1. Deploy the Worker
 
 ```bash
-cd cfrelaytun/worker
+cd worker
 cp wrangler.example.jsonc wrangler.jsonc
-# edit wrangler.jsonc: set name, routes, AGENT_TOKEN
+# edit wrangler.jsonc: set name, routes, ORIGIN_TOKEN
 npx wrangler deploy
 ```
 
@@ -38,8 +38,8 @@ Worker.
 ### 2. Run a Go client
 
 ```bash
-cd cfrelaytun/go/example
-go run . -url wss://tun.example.com/agent -token "$AGENT_TOKEN" -addr :3000
+cd example
+go run . -url wss://tun.example.com/origin -token "$ORIGIN_TOKEN" -addr :3000
 ```
 
 That exposes whatever's serving on `:3000` at the public URL.
@@ -47,11 +47,11 @@ That exposes whatever's serving on `:3000` at the public URL.
 Or, from your own Go code:
 
 ```go
-import "github.com/divy/orchid/cfrelaytun/go/cfrelaytun"
+import "github.com/littledivy/cfrelaytun"
 
 err := cfrelaytun.Run(ctx, cfrelaytun.Config{
-    URL:     "wss://tun.example.com/agent",
-    Token:   os.Getenv("AGENT_TOKEN"),
+    URL:     "wss://tun.example.com/origin",
+    Token:   os.Getenv("ORIGIN_TOKEN"),
     Handler: myHandler,
 })
 ```
@@ -59,23 +59,23 @@ err := cfrelaytun.Run(ctx, cfrelaytun.Config{
 ## Protocol
 
 WS frames are either control (JSON text) or stream body (binary, 4-byte
-big-endian stream id prefix + chunk). See `go/frame.go` and
+big-endian stream id prefix + chunk). See `frame.go` and
 `worker/src/session.ts` for the canonical envelope.
 
 Control frame types:
 
-| `t`         | Direction      | Meaning                                  |
-|-------------|----------------|------------------------------------------|
-| `hello`     | server → agent | First frame, includes server info        |
-| `req`       | server → agent | Public HTTP request inbound              |
-| `req-end`   | server → agent | Request body finished                    |
-| `cancel`    | server → agent | Public client gave up                    |
-| `res-head`  | agent → server | Status + headers ready                   |
-| `res-end`   | agent → server | Response body finished                   |
-| `ws-open`   | server → agent | Public WS upgrade inbound                |
-| `ws-text`   | both           | WS text payload for stream `id`          |
-| `ws-close`  | both           | Close WS stream `id`                     |
-| `pong`      | both           | Heartbeat reply                          |
+| `t`         | Direction       | Meaning                                  |
+|-------------|-----------------|------------------------------------------|
+| `hello`     | server → origin | First frame, includes server info        |
+| `req`       | server → origin | Public HTTP request inbound              |
+| `req-end`   | server → origin | Request body finished                    |
+| `cancel`    | server → origin | Public client gave up                    |
+| `res-head`  | origin → server | Status + headers ready                   |
+| `res-end`   | origin → server | Response body finished                   |
+| `ws-open`   | server → origin | Public WS upgrade inbound                |
+| `ws-text`   | both            | WS text payload for stream `id`          |
+| `ws-close`  | both            | Close WS stream `id`                     |
+| `pong`      | both            | Heartbeat reply                          |
 
 Extensions (project-specific frames) ride the same WS — see
 `OnCtl(name, fn)` on the Go side and the `extraHandler` hook on the
@@ -83,7 +83,7 @@ Worker side.
 
 ## Caveats
 
-- One agent WS per tunnel name. New connect replaces old.
+- One origin WS per tunnel name. New connect replaces old.
 - Durable Object holds the WS. DO restart kills in-flight requests.
   Workers's `state.acceptWebSocket` keeps the socket alive across
   hibernation.

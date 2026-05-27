@@ -14,7 +14,7 @@ import {
 export { defineTunnelSession } from './session'
 export type { Env, RelayOptions, RoutingMode, SessionContext, Frame } from './types'
 
-// makeRelayApp returns a Hono app that handles agent connects, public
+// makeRelayApp returns a Hono app that handles origin connects, public
 // HTTP/WS proxying, and a small status endpoint. Mount it from your
 // Worker's default export.
 export function makeRelayApp<E extends Record<string, any> = Record<string, any>>(
@@ -37,11 +37,11 @@ export function makeRelayApp<E extends Record<string, any> = Record<string, any>
 
     const url = new URL(c.req.url)
 
-    // Agent WS connect.
-    if (innerPath.split('?')[0] === '/agent' || url.pathname === '/agent') {
+    // Origin WS connect.
+    if (innerPath.split('?')[0] === '/origin' || url.pathname === '/origin') {
       const do_ = getDO(c.env, tunnel)
       const internal = new Request(
-        new URL(INTERNAL_PATHS.agent + url.search, url),
+        new URL(INTERNAL_PATHS.origin + url.search, url),
         c.req.raw,
       )
       internal.headers.set(TUNNEL_HEADER, tunnel)

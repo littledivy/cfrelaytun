@@ -1,4 +1,4 @@
-// Frame protocol shared by the Worker DO and the agent client. JSON text
+// Frame protocol shared by the Worker DO and the origin client. JSON text
 // frames carry control; binary frames carry stream bodies with a 4-byte
 // big-endian stream-id prefix.
 export type Frame =
@@ -39,10 +39,10 @@ export type RoutingMode =
 export interface RelayOptions<E = any> {
   // Routing mode.
   routing: RoutingMode
-  // Returns the static agent token for a given tunnel name. The token is
-  // matched against ?token= / X-Agent-Token on /agent WS upgrades. Return
+  // Returns the static origin token for a given tunnel name. The token is
+  // matched against ?token= / X-Origin-Token on /origin WS upgrades. Return
   // null to reject the connection.
-  agentToken: (env: E, tunnel: string) => string | null | Promise<string | null>
+  originToken: (env: E, tunnel: string) => string | null | Promise<string | null>
   // Optional gate on public-side requests. Return a Response to short-
   // circuit (e.g. send a 401 / redirect). Return undefined to allow.
   publicAuth?: (req: Request, env: E, tunnel: string) => undefined | Response | Promise<undefined | Response>
@@ -56,12 +56,12 @@ export interface RelayOptions<E = any> {
 export type Env = any
 
 // SessionContext is handed to onExtraFrame so extensions can talk back
-// to the agent and to currently-connected subscriber WSs.
+// to the origin and to currently-connected subscriber WSs.
 export interface SessionContext {
-  // Send a control frame back to the agent.
-  sendToAgent: (frame: any) => void
-  // Get the agent WebSocket if connected.
-  agentWS: WebSocket | null
+  // Send a control frame back to the origin.
+  sendToOrigin: (frame: any) => void
+  // Get the origin WebSocket if connected.
+  originWS: WebSocket | null
 }
 
 export interface ParsedRoute {

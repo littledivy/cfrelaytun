@@ -1,4 +1,4 @@
-// TunnelSession Durable Object. Holds the agent's outbound WebSocket and
+// TunnelSession Durable Object. Holds the origin's outbound WebSocket and
 // routes HTTP/WS requests across it using the frame protocol defined in
 // types.ts.
 import {
@@ -21,7 +21,7 @@ interface PendingStream {
 
 // Internal endpoints the makeRelayApp router uses to talk to its DO.
 export const INTERNAL_PATHS = {
-  agent: '/__cfrelaytun/agent',
+  origin: '/__cfrelaytun/origin',
   proxy: '/__cfrelaytun/proxy',
   proxyWS: '/__cfrelaytun/proxy_ws',
   info: '/__cfrelaytun/info',
@@ -42,41 +42,41 @@ export function defineTunnelSession<E = any>(options: RelayOptions<E>) {
   return class TunnelSession {
     state: DurableObjectState
     env: Env
-    agentWS: WebSocket | null = null
+    originWS: WebSocket | null = null
     nextStreamId = 1
     streams = new Map<number, PendingStream>()
 
     constructor(state: DurableObjectState, env: Env) {
       this.state = state
       this.env = env
-      // Resurrect the agent WS that Cloudflare held open across DO
+      // Resurrect the origin WS that Cloudflare held open across DO
       // eviction so the first cold-start proxy doesn't see a stale
-      // "agent offline".
-      const existing = state.getWebSockets('agent')
+      // "origin offline".
+      const existing = state.getWebSockets('origin')
       if (existing.length > 0) {
-        this.agentWS = existing[0] as unknown as WebSocket
+        this.originWS = existing[0] as unknown as WebSocket
       }
     }
 
     async fetch(req: Request): Promise<Response> {
       const url = new URL(req.url)
       const tunnel = req.headers.get(TUNNEL_HEADER) ?? ''
-      if (url.pathname === INTERNAL_PATHS.agent) return this.handleAgent(req, tunnel)
+      if (url.pathname === INTERNAL_PATHS.origin) return this.handleOrigin(req, tunnel)
       if (url.pathname === INTERNAL_PATHS.proxy) return this.handleProxy(req)
       if (url.pathname === INTERNAL_PATHS.proxyWS) return this.handleProxyWS(req)
       if (url.pathname === INTERNAL_PATHS.info) {
-        return Response.json({ connected: !!this.agentWS })
+        return Response.json({ connected: !!this.originWS })
       }
       return new Response('not found', { status: 404 })
     }
 
-    async handleAgent(req: Request, tunnel: string): Promise<Response> {
+    async handleOrigin(req: Request, tunnel: string): Promise<Response> {
       if (req.headers.get('upgrade') !== 'websocket') {
         return new Response('expected websocket', { status: 426 })
       }
       const url = new URL(req.url)
-      const token = url.searchParams.get('token') ?? req.headers.get('x-agent-token')
-      const expected = await options.agentToken(this.env, tunnel)
+      const token = url.searchParams.get('token') ?? req.headers.get('x-origin-token')
+      const expected = await options.originToken(this.env, tunnel)
       if (!expected || token !== expected) {
         return new Response('auth', { status: 401 })
       }
@@ -84,39 +84,39 @@ export function defineTunnelSession<E = any>(options: RelayOptions<E>) {
       const pair = new WebSocketPair()
       const client = pair[0]
       const server = pair[1]
-      if (this.agentWS) {
-        try { this.agentWS.close(4000, 'replaced by new agent') } catch {}
+      if (this.originWS) {
+        try { this.originWS.close(4000, 'replaced by new origin') } catch {}
       }
-      this.state.acceptWebSocket(server, ['agent'])
-      this.agentWS = server
+      this.state.acceptWebSocket(server, ['origin'])
+      this.originWS = server
       server.send(JSON.stringify({ t: 'hello', server: 'cfrelaytun/0.1' } satisfies Frame))
       return new Response(null, { status: 101, webSocket: client })
     }
 
     async webSocketMessage(ws: WebSocket, data: string | ArrayBuffer) {
       try {
-        if (this.agentWS == null) this.agentWS = ws
-        this.onAgentMessage(ws, data)
+        if (this.originWS == null) this.originWS = ws
+        this.onOriginMessage(ws, data)
       } catch {}
     }
 
     async webSocketClose(ws: WebSocket, _code: number, _reason: string, _wasClean: boolean) {
-      if (this.agentWS === ws) this.agentWS = null
+      if (this.originWS === ws) this.originWS = null
       for (const s of this.streams.values()) {
-        s.res.reject(new Error('agent disconnected'))
+        s.res.reject(new Error('origin disconnected'))
         try { s.body?.controller.close() } catch {}
-        try { s.ws?.close(1011, 'agent disconnected') } catch {}
+        try { s.ws?.close(1011, 'origin disconnected') } catch {}
       }
       this.streams.clear()
     }
 
     async webSocketError(ws: WebSocket, _err: unknown) {
-      if (this.agentWS === ws) this.agentWS = null
+      if (this.originWS === ws) this.originWS = null
     }
 
     async handleProxy(req: Request): Promise<Response> {
-      if (!this.agentWS) await this.waitForAgent(3000)
-      if (!this.agentWS) return new Response('agent offline', { status: 503 })
+      if (!this.originWS) await this.waitForOrigin(3000)
+      if (!this.originWS) return new Response('origin offline', { status: 503 })
       try {
         const innerReq = await innerRequestFromProxyBody(req)
         return await this.send(innerReq)
@@ -125,15 +125,15 @@ export function defineTunnelSession<E = any>(options: RelayOptions<E>) {
       }
     }
 
-    async waitForAgent(ms: number): Promise<void> {
+    async waitForOrigin(ms: number): Promise<void> {
       const deadline = Date.now() + ms
-      while (!this.agentWS && Date.now() < deadline) {
+      while (!this.originWS && Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, 100))
       }
     }
 
     async handleProxyWS(req: Request): Promise<Response> {
-      if (!this.agentWS) return new Response('agent offline', { status: 503 })
+      if (!this.originWS) return new Response('origin offline', { status: 503 })
       const innerPath = req.headers.get(INNER_URL_HEADER) ?? '/'
       const innerHeaders = parseHeaderBlockList(req.headers.get(INNER_HEADERS_HEADER) ?? '')
 
@@ -145,22 +145,22 @@ export function defineTunnelSession<E = any>(options: RelayOptions<E>) {
       const id = this.nextStreamId++
       this.streams.set(id, { res: { resolve: () => {}, reject: () => {} }, ws: server })
 
-      this.agentWS.send(JSON.stringify({
+      this.originWS.send(JSON.stringify({
         t: 'ws-open', id, path: innerPath, headers: innerHeaders,
       } satisfies Frame))
 
       server.addEventListener('message', (ev) => {
-        if (!this.agentWS) return
+        if (!this.originWS) return
         if (typeof ev.data === 'string') {
-          this.agentWS.send(JSON.stringify({ t: 'ws-text', id, data: ev.data } satisfies Frame))
+          this.originWS.send(JSON.stringify({ t: 'ws-text', id, data: ev.data } satisfies Frame))
         } else {
-          this.agentWS.send(encodeBinary(id, new Uint8Array(ev.data as ArrayBuffer)))
+          this.originWS.send(encodeBinary(id, new Uint8Array(ev.data as ArrayBuffer)))
         }
       })
       server.addEventListener('close', (ev) => {
-        if (this.agentWS) {
+        if (this.originWS) {
           try {
-            this.agentWS.send(JSON.stringify({ t: 'ws-close', id, code: ev.code, reason: ev.reason } satisfies Frame))
+            this.originWS.send(JSON.stringify({ t: 'ws-close', id, code: ev.code, reason: ev.reason } satisfies Frame))
           } catch {}
         }
         this.streams.delete(id)
@@ -181,7 +181,7 @@ export function defineTunnelSession<E = any>(options: RelayOptions<E>) {
       })
 
       const url = new URL(req.url)
-      this.agentWS!.send(JSON.stringify({
+      this.originWS!.send(JSON.stringify({
         t: 'req', id, method: req.method, path: url.pathname + url.search,
         headers: headerList, hasBody,
       } satisfies Frame))
@@ -191,15 +191,15 @@ export function defineTunnelSession<E = any>(options: RelayOptions<E>) {
         while (true) {
           const { value, done } = await reader.read()
           if (done) break
-          if (value) this.agentWS!.send(encodeBinary(id, value))
+          if (value) this.originWS!.send(encodeBinary(id, value))
         }
       }
-      this.agentWS!.send(JSON.stringify({ t: 'req-end', id } satisfies Frame))
+      this.originWS!.send(JSON.stringify({ t: 'req-end', id } satisfies Frame))
 
       return promise
     }
 
-    onAgentMessage(_ws: WebSocket, data: string | ArrayBuffer) {
+    onOriginMessage(_ws: WebSocket, data: string | ArrayBuffer) {
       if (typeof data === 'string') {
         let f: any
         try { f = JSON.parse(data) } catch { return }
@@ -231,10 +231,10 @@ export function defineTunnelSession<E = any>(options: RelayOptions<E>) {
           this.streams.delete(f.id)
         } else if (f?.t && options.onExtraFrame) {
           const ctx: SessionContext = {
-            sendToAgent: (frame: any) => {
-              try { this.agentWS?.send(JSON.stringify(frame)) } catch {}
+            sendToOrigin: (frame: any) => {
+              try { this.originWS?.send(JSON.stringify(frame)) } catch {}
             },
-            agentWS: this.agentWS,
+            originWS: this.originWS,
           }
           void options.onExtraFrame(f, ctx)
         }
@@ -254,7 +254,7 @@ export function defineTunnelSession<E = any>(options: RelayOptions<E>) {
 async function innerRequestFromProxyBody(req: Request): Promise<Request> {
   const inner = req.headers.get(INNER_URL_HEADER)
   if (!inner) throw new Error('missing inner url')
-  return new Request('https://agent.internal' + inner, {
+  return new Request('https://origin.internal' + inner, {
     method: req.headers.get(INNER_METHOD_HEADER) ?? 'GET',
     headers: parseHeaderBlock(req.headers.get(INNER_HEADERS_HEADER) ?? ''),
     body: req.body,

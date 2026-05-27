@@ -11,7 +11,7 @@
     // { "pattern": "*.tun.example.com/*", "zone_name": "example.com" }
   ],
   "vars": {
-    "AGENT_TOKEN": "replace-me",
+    "ORIGIN_TOKEN": "replace-me",
     "ROOT_DOMAIN": "tun.example.com"
   },
   "durable_objects": {

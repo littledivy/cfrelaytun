@@ -6,8 +6,8 @@
 // Minimal use:
 //
 //	err := cfrelaytun.Run(ctx, cfrelaytun.Config{
-//	    URL:     "wss://tun.example.com/agent",
-//	    Token:   os.Getenv("AGENT_TOKEN"),
+//	    URL:     "wss://tun.example.com/origin",
+//	    Token:   os.Getenv("ORIGIN_TOKEN"),
 //	    Handler: myHandler,
 //	})
 //
@@ -23,9 +23,9 @@ import (
 
 // Config bundles the parameters needed to run a tunnel client.
 type Config struct {
-	// URL is the wss:// endpoint of the relay's /agent route.
+	// URL is the wss:// endpoint of the relay's /origin route.
 	URL string
-	// Token is sent both as ?token= and as X-Agent-Token. Must match the
+	// Token is sent both as ?token= and as X-Origin-Token. Must match the
 	// token configured on the Worker side.
 	Token string
 	// Handler serves HTTP requests forwarded from the relay. Required.
@@ -43,7 +43,7 @@ type Config struct {
 // WSHandler handles a single public WebSocket session forwarded from the
 // relay. The req mirrors the incoming HTTP request (path, headers) and the
 // conn is a bidirectional WS-like adapter that multiplexes its frames over
-// the agent's relay socket.
+// the origin's relay socket.
 type WSHandler func(ctx context.Context, req *http.Request, conn WSConn) error
 
 // WSConn is the per-stream WebSocket adapter passed to OnWSUpgrade.
@@ -67,7 +67,7 @@ type Client struct {
 	cfg       Config
 	extra     map[string]CtlHandler
 	onConnect []func(context.Context, Session)
-	live      *agent // current session (nil between reconnects)
+	live      *origin // current session (nil between reconnects)
 }
 
 // New constructs a Client without starting it.
@@ -85,7 +85,7 @@ func (c *Client) OnCtl(t string, fn CtlHandler) {
 }
 
 // OnConnect registers a callback fired immediately after a successful
-// agent handshake. Use it to push initial state to the relay (e.g.
+// origin handshake. Use it to push initial state to the relay (e.g.
 // config, snapshots) on every reconnect.
 func (c *Client) OnConnect(fn func(ctx context.Context, sess Session)) {
 	c.onConnect = append(c.onConnect, fn)
@@ -112,7 +112,7 @@ func (c *Client) Send(ctx context.Context, t string, payload any) bool {
 // Run blocks, dialing the relay and serving forwarded requests with
 // exponential backoff between disconnects. Returns when ctx is cancelled.
 func (c *Client) Run(ctx context.Context) error {
-	return runAgent(ctx, c)
+	return runOrigin(ctx, c)
 }
 
 // Run is a convenience wrapper for the common case of "construct, then

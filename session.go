@@ -13,9 +13,9 @@ import (
 	"github.com/coder/websocket"
 )
 
-// runAgent is the reconnect loop. Session >30s resets backoff; faster
+// runOrigin is the reconnect loop. Session >30s resets backoff; faster
 // failures double it up to 15s.
-func runAgent(parent context.Context, c *Client) error {
+func runOrigin(parent context.Context, c *Client) error {
 	if c.cfg.Handler == nil {
 		return fmt.Errorf("cfrelaytun: Config.Handler is required")
 	}
@@ -53,7 +53,7 @@ func runSession(ctx context.Context, c *Client) error {
 
 	hdr := http.Header{"User-Agent": []string{"cfrelaytun/1.0"}}
 	if c.cfg.Token != "" {
-		hdr.Set("X-Agent-Token", c.cfg.Token)
+		hdr.Set("X-Origin-Token", c.cfg.Token)
 	}
 
 	conn, _, err := websocket.Dial(ctx, u.String(), &websocket.DialOptions{HTTPHeader: hdr})
@@ -65,10 +65,10 @@ func runSession(ctx context.Context, c *Client) error {
 		c.cfg.Logger("relay: connected to %s", c.cfg.URL)
 	}
 
-	a := &agent{
+	a := &origin{
 		client:  c,
 		conn:    conn,
-		streams: map[uint32]*agentStream{},
+		streams: map[uint32]*originStream{},
 		ws:      map[uint32]*wsStreamState{},
 	}
 	c.live = a
@@ -85,19 +85,19 @@ func runSession(ctx context.Context, c *Client) error {
 	return a.loop(ctx)
 }
 
-// agent holds the per-connection state for one relay session.
-type agent struct {
+// origin holds the per-connection state for one relay session.
+type origin struct {
 	client *Client
 	conn   *websocket.Conn
 
 	writeMu sync.Mutex
 
 	mu      sync.Mutex
-	streams map[uint32]*agentStream
+	streams map[uint32]*originStream
 	ws      map[uint32]*wsStreamState
 }
 
-type agentStream struct {
+type originStream struct {
 	bodyR *io.PipeReader
 	bodyW *io.PipeWriter
 }
@@ -114,14 +114,14 @@ type wsInbound struct {
 
 // ─── send helpers ─────────────────────────────────────────────────────
 
-func (a *agent) sendCtl(ctx context.Context, f ctlFrame) error {
+func (a *origin) sendCtl(ctx context.Context, f ctlFrame) error {
 	b, _ := json.Marshal(f)
 	a.writeMu.Lock()
 	defer a.writeMu.Unlock()
 	return a.conn.Write(ctx, websocket.MessageText, b)
 }
 
-func (a *agent) sendBin(ctx context.Context, id uint32, data []byte) error {
+func (a *origin) sendBin(ctx context.Context, id uint32, data []byte) error {
 	out := encodeBinary(id, data)
 	a.writeMu.Lock()
 	defer a.writeMu.Unlock()
@@ -130,7 +130,7 @@ func (a *agent) sendBin(ctx context.Context, id uint32, data []byte) error {
 
 // sendExtra serializes an arbitrary {t, ...payload} JSON object. Payload
 // must marshal to a JSON object; its fields are merged with `t`.
-func (a *agent) sendExtra(ctx context.Context, t string, payload any) error {
+func (a *origin) sendExtra(ctx context.Context, t string, payload any) error {
 	var obj map[string]json.RawMessage
 	if payload != nil {
 		b, err := json.Marshal(payload)
@@ -153,13 +153,13 @@ func (a *agent) sendExtra(ctx context.Context, t string, payload any) error {
 }
 
 // SendCtl satisfies Session.
-func (a *agent) SendCtl(ctx context.Context, t string, payload any) error {
+func (a *origin) SendCtl(ctx context.Context, t string, payload any) error {
 	return a.sendExtra(ctx, t, payload)
 }
 
 // ─── ping ─────────────────────────────────────────────────────────────
 
-func (a *agent) pingLoop(ctx context.Context) {
+func (a *origin) pingLoop(ctx context.Context) {
 	t := time.NewTicker(25 * time.Second)
 	defer t.Stop()
 	for {
@@ -176,7 +176,7 @@ func (a *agent) pingLoop(ctx context.Context) {
 
 // ─── main loop ────────────────────────────────────────────────────────
 
-func (a *agent) loop(ctx context.Context) error {
+func (a *origin) loop(ctx context.Context) error {
 	for {
 		mt, data, err := a.conn.Read(ctx)
 		if err != nil {
@@ -191,7 +191,7 @@ func (a *agent) loop(ctx context.Context) error {
 	}
 }
 
-func (a *agent) onBinary(ctx context.Context, data []byte) {
+func (a *origin) onBinary(ctx context.Context, data []byte) {
 	sid, body, ok := decodeBinary(data)
 	if !ok {
 		return
@@ -210,7 +210,7 @@ func (a *agent) onBinary(ctx context.Context, data []byte) {
 	}
 }
 
-func (a *agent) onCtl(ctx context.Context, raw []byte) {
+func (a *origin) onCtl(ctx context.Context, raw []byte) {
 	t := peekType(raw)
 	switch t {
 	case "":
@@ -223,7 +223,7 @@ func (a *agent) onCtl(ctx context.Context, raw []byte) {
 			return
 		}
 		pr, pw := io.Pipe()
-		s := &agentStream{bodyR: pr, bodyW: pw}
+		s := &originStream{bodyR: pr, bodyW: pw}
 		a.mu.Lock()
 		a.streams[f.ID] = s
 		a.mu.Unlock()
@@ -298,7 +298,7 @@ func (a *agent) onCtl(ctx context.Context, raw []byte) {
 	}
 }
 
-func (a *agent) takeStream(id uint32, remove bool) *agentStream {
+func (a *origin) takeStream(id uint32, remove bool) *originStream {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	s := a.streams[id]
@@ -310,7 +310,7 @@ func (a *agent) takeStream(id uint32, remove bool) *agentStream {
 
 // ─── HTTP tunnel ──────────────────────────────────────────────────────
 
-func (a *agent) handleReq(ctx context.Context, f *ctlFrame, s *agentStream) {
+func (a *origin) handleReq(ctx context.Context, f *ctlFrame, s *originStream) {
 	defer func() {
 		a.mu.Lock()
 		delete(a.streams, f.ID)
@@ -329,7 +329,7 @@ func (a *agent) handleReq(ctx context.Context, f *ctlFrame, s *agentStream) {
 		}
 	}
 
-	rw := &relayWriter{id: f.ID, agent: a, ctx: ctx, header: http.Header{}, status: 200}
+	rw := &relayWriter{id: f.ID, origin: a, ctx: ctx, header: http.Header{}, status: 200}
 	a.client.cfg.Handler.ServeHTTP(rw, req)
 	rw.finish()
 }
@@ -339,7 +339,7 @@ func (a *agent) handleReq(ctx context.Context, f *ctlFrame, s *agentStream) {
 // forwards chunks immediately (SSE).
 type relayWriter struct {
 	id     uint32
-	agent  *agent
+	origin  *origin
 	ctx    context.Context
 	header http.Header
 	status int
@@ -352,7 +352,7 @@ func (w *relayWriter) Header() http.Header { return w.header }
 func (w *relayWriter) WriteHeader(s int)   { w.status = s }
 func (w *relayWriter) Write(b []byte) (int, error) {
 	w.flushHead()
-	if err := w.agent.sendBin(w.ctx, w.id, b); err != nil {
+	if err := w.origin.sendBin(w.ctx, w.id, b); err != nil {
 		return 0, err
 	}
 	return len(b), nil
@@ -371,19 +371,19 @@ func (w *relayWriter) flushHead() {
 			hdrs = append(hdrs, []string{k, v})
 		}
 	}
-	_ = w.agent.sendCtl(w.ctx, ctlFrame{
+	_ = w.origin.sendCtl(w.ctx, ctlFrame{
 		T: "res-head", ID: w.id, Status: w.status,
 		Headers: hdrs, Stream: w.stream,
 	})
 }
 func (w *relayWriter) finish() {
 	w.flushHead()
-	_ = w.agent.sendCtl(w.ctx, ctlFrame{T: "res-end", ID: w.id})
+	_ = w.origin.sendCtl(w.ctx, ctlFrame{T: "res-end", ID: w.id})
 }
 
 // ─── WS tunnel ────────────────────────────────────────────────────────
 
-func (a *agent) handleWSOpen(parent context.Context, f *ctlFrame) {
+func (a *origin) handleWSOpen(parent context.Context, f *ctlFrame) {
 	if a.client.cfg.OnWSUpgrade == nil {
 		_ = a.sendCtl(parent, ctlFrame{T: "ws-close", ID: f.ID, Code: 1011, Reason: "no ws handler"})
 		return
@@ -416,7 +416,7 @@ func (a *agent) handleWSOpen(parent context.Context, f *ctlFrame) {
 		}
 	}
 
-	wc := &agentWSConn{agent: a, id: f.ID, state: state}
+	wc := &originWSConn{origin: a, id: f.ID, state: state}
 	err = a.client.cfg.OnWSUpgrade(dialCtx, req, wc)
 	if err != nil {
 		_ = a.sendCtl(parent, ctlFrame{T: "ws-close", ID: f.ID, Code: 1011, Reason: err.Error()})
@@ -425,20 +425,20 @@ func (a *agent) handleWSOpen(parent context.Context, f *ctlFrame) {
 	_ = a.sendCtl(parent, ctlFrame{T: "ws-close", ID: f.ID, Code: 1000})
 }
 
-// agentWSConn adapts the relay tunnel into a per-stream WS interface.
-type agentWSConn struct {
-	agent *agent
+// originWSConn adapts the relay tunnel into a per-stream WS interface.
+type originWSConn struct {
+	origin *origin
 	id    uint32
 	state *wsStreamState
 }
 
-func (w *agentWSConn) WriteText(ctx context.Context, s string) error {
-	return w.agent.sendCtl(ctx, ctlFrame{T: "ws-text", ID: w.id, Data: s})
+func (w *originWSConn) WriteText(ctx context.Context, s string) error {
+	return w.origin.sendCtl(ctx, ctlFrame{T: "ws-text", ID: w.id, Data: s})
 }
-func (w *agentWSConn) WriteBinary(ctx context.Context, b []byte) error {
-	return w.agent.sendBin(ctx, w.id, b)
+func (w *originWSConn) WriteBinary(ctx context.Context, b []byte) error {
+	return w.origin.sendBin(ctx, w.id, b)
 }
-func (w *agentWSConn) NextFrame(ctx context.Context) (string, []byte, error) {
+func (w *originWSConn) NextFrame(ctx context.Context) (string, []byte, error) {
 	select {
 	case <-ctx.Done():
 		return "", nil, ctx.Err()
@@ -449,9 +449,9 @@ func (w *agentWSConn) NextFrame(ctx context.Context) (string, []byte, error) {
 		return f.kind, f.data, nil
 	}
 }
-func (w *agentWSConn) Close(code int, reason string) error {
+func (w *originWSConn) Close(code int, reason string) error {
 	w.state.cancel()
-	return w.agent.sendCtl(context.Background(), ctlFrame{
+	return w.origin.sendCtl(context.Background(), ctlFrame{
 		T: "ws-close", ID: w.id, Code: code, Reason: reason,
 	})
 }

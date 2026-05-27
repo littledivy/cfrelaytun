@@ -1,17 +1,17 @@
-// Minimal cfrelaytun Worker. Replace AGENT_TOKEN with a per-tunnel
+// Minimal cfrelaytun Worker. Replace ORIGIN_TOKEN with a per-tunnel
 // secret (e.g. derived from KV) for multi-tenant deploys.
 import { defineTunnelSession, makeRelayApp } from '../src'
 
 interface Env {
   TUNNEL: DurableObjectNamespace
-  AGENT_TOKEN: string
+  ORIGIN_TOKEN: string
   ROOT_DOMAIN: string
 }
 
 const options = {
   // Switch to { mode: 'path-prefix' } for workers.dev / no-DNS deploys.
   routing: { mode: 'subdomain' as const, rootDomain: '' /* set per-env from ROOT_DOMAIN */ },
-  agentToken: (env: Env, _tunnel: string) => env.AGENT_TOKEN,
+  originToken: (env: Env, _tunnel: string) => env.ORIGIN_TOKEN,
 }
 
 export const TunnelSession = defineTunnelSession(options)
